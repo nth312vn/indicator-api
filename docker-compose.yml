@@ -1,0 +1,36 @@
+services:
+  indicator-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - NO_PROXY=${NO_PROXY:-}
+    container_name: indicator-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - APP_NAME=Technical Indicator API
+      - APP_VERSION=1.0.0
+      - DEBUG=False
+      - API_V1_PREFIX=/api/v1
+      - FIIN_DATA_API_BASE_URL=${FIIN_DATA_API_BASE_URL:-http://127.0.0.1:8000}
+      - FIIN_DATA_API_PATH=${FIIN_DATA_API_PATH:-/api/v1/portfolio-construction/fiin_data/stockist}
+      - FIIN_API_TIMEOUT_SECONDS=30.0
+      - FIIN_MAX_KEEPALIVE_CONNECTIONS=20
+      - FIIN_MAX_CONNECTIONS=100
+      - ENABLE_MOCK_FALLBACK=True
+      - MAX_WORKERS=${MAX_WORKERS:-}
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

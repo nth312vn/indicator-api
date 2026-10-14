@@ -1,0 +1,10 @@
+# Docker Compose configuration for development with live code reloading
+services:
+  indicator-api:
+    container_name: indicator-api-dev
+    environment:
+      - DEBUG=True
+    volumes:
+      - ./app:/app/app:ro
+      - ./tests:/app/tests:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

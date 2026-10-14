@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment configs (prevent baking sensitive secrets into image)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation & Benchmarks
+docs/
+scripts/

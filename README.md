@@ -121,10 +121,32 @@ Trên Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. Khởi chạy Server
+### 2. Khởi chạy Server (Local)
 
 ```powershell
 .\.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3. Khởi chạy bằng Docker & Docker Compose
+
+**Chạy với Docker Compose (Mặc định / Production mode):**
+```bash
+docker compose up -d --build
+```
+
+**Chạy chế độ phát triển (Live reload khi sửa code trong `app/`):**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+**Chạy test suite bên trong container:**
+```bash
+docker compose exec indicator-api pytest -v
+```
+
+**Dừng container:**
+```bash
+docker compose down
 ```
 
 - **Swagger UI (Interactive Docs)**: http://localhost:8000/docs

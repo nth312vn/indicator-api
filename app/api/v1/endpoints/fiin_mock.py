@@ -18,7 +18,7 @@ async def get_stockist_ohlcv(
     start_time: Optional[str] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
     end_time: Optional[str] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="Trang dữ liệu"),
-    page_size: int = Query(100, ge=1, le=50000, description="Kích thước trang"),
+    page_size: int = Query(100, ge=1, le=5000, description="Kích thước trang"),
 ) -> FiinOHLCVResponse:
     """Generate or retrieve stockist OHLCV data."""
     ticker_list: List[str] = []

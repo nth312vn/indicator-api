@@ -126,13 +126,11 @@ async def calculate_indicators(
         except ValueError:
             fetch_start_time = start_date
 
-    # 3. Fetch OHLCV historical data with lookback history
-    ohlcv_response = await fiin_client.fetch_ohlcv(
+    # 3. Fetch OHLCV historical data across all pages with lookback history
+    ohlcv_response = await fiin_client.fetch_all_ohlcv(
         ticker=tickers_query_str,
         start_time=fetch_start_time,
         end_time=end_date,
-        page=1,
-        page_size=50000,
     )
 
     records = ohlcv_response.data

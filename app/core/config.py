@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     FIIN_API_TIMEOUT_SECONDS: float = 30.0
     FIIN_MAX_KEEPALIVE_CONNECTIONS: int = 20
     FIIN_MAX_CONNECTIONS: int = 100
+    FIIN_FETCH_PAGE_SIZE: int = 1000
 
     # Auto fallback to mock data if live Fiin server is unreachable
     ENABLE_MOCK_FALLBACK: bool = True

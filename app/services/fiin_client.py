@@ -1,9 +1,10 @@
-from typing import Any, Dict, Optional
+import asyncio
+from typing import Any, Dict, List, Optional
 import httpx
 from app.core.config import get_settings
 from app.core.exceptions import FiinDataFetchError
 from app.core.logging import logger
-from app.schemas.ohlcv import FiinOHLCVResponse
+from app.schemas.ohlcv import FiinOHLCVResponse, OHLCVRecord, PaginationMetadata
 from app.services.mock_fiin_service import generate_mock_ohlcv
 
 settings = get_settings()
@@ -39,6 +40,8 @@ class FiinDataClient:
         end_time: Optional[str] = None,
         page: int = 1,
         page_size: int = 100,
+        fetch_all: bool = False,
+        client: Optional[httpx.AsyncClient] = None,
     ) -> FiinOHLCVResponse:
         """
         Fetch OHLCV historical price data from Fiin stockist endpoint.
@@ -49,7 +52,18 @@ class FiinDataClient:
             end_time: End date/time
             page: Pagination page number
             page_size: Pagination page size
+            fetch_all: If True, automatically paginates and fetches all available records
+            client: Optional httpx.AsyncClient instance to reuse connections
         """
+        if fetch_all:
+            return await self.fetch_all_ohlcv(
+                ticker=ticker,
+                start_time=start_time,
+                end_time=end_time,
+                page_size=page_size,
+                client=client,
+            )
+
         params: Dict[str, Any] = {
             "ticker": ticker,
             "page": page,
@@ -63,18 +77,18 @@ class FiinDataClient:
         url = f"{self._base_url}{self._endpoint_path}"
         logger.info(f"Fetching OHLCV data from {url} with params: {params}")
 
-        client = await self._get_client()
-        owns_client = client != self._client
+        target_client = client or await self._get_client()
+        owns_client = (client is None) and (target_client != self._client)
 
         try:
-            response = await client.get(self._endpoint_path, params=params)
+            response = await target_client.get(self._endpoint_path, params=params)
             response.raise_for_status()
             data_json = response.json()
             return FiinOHLCVResponse.model_validate(data_json)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
             logger.warning(f"Failed to query live Fiin API ({url}): {exc}")
             if settings.ENABLE_MOCK_FALLBACK:
-                logger.info(f"Fallback to mock OHLCV generator for ticker(s)='{ticker}'")
+                logger.info(f"Fallback to mock OHLCV generator for ticker(s)='{ticker}' (page={page}, page_size={page_size})")
                 return generate_mock_ohlcv(
                     tickers=ticker,
                     start_time=start_time,
@@ -88,7 +102,119 @@ class FiinDataClient:
             ) from exc
         finally:
             if owns_client:
-                await client.aclose()
+                await target_client.aclose()
+
+    async def fetch_all_ohlcv(
+        self,
+        ticker: str,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        page_size: Optional[int] = None,
+        client: Optional[httpx.AsyncClient] = None,
+    ) -> FiinOHLCVResponse:
+        """
+        Fetch all OHLCV historical price data across all pages for the given ticker(s) and time range.
+        Handles pagination automatically:
+        1. Requests first page with specified page_size (defaults to settings.FIIN_FETCH_PAGE_SIZE).
+        2. Detects total_pages from response metadata. If total_pages > 1, fetches remaining pages concurrently
+           with bounded concurrency.
+        3. If total_pages is not provided in metadata but the page is full, paginates sequentially until exhausted.
+        4. Deduplicates and returns records chronologically sorted.
+        """
+        effective_page_size = page_size or settings.FIIN_FETCH_PAGE_SIZE
+        target_client = client or await self._get_client()
+        owns_client = (client is None) and (target_client != self._client)
+
+        try:
+            # 1. Fetch page 1
+            first_response = await self.fetch_ohlcv(
+                ticker=ticker,
+                start_time=start_time,
+                end_time=end_time,
+                page=1,
+                page_size=effective_page_size,
+                client=target_client,
+            )
+
+            all_records: List[OHLCVRecord] = list(first_response.data)
+            pagination = first_response.pagination
+
+            # 2. Handle subsequent pages
+            if pagination and pagination.total_pages > 1:
+                total_pages = pagination.total_pages
+                logger.info(
+                    f"Fiin OHLCV pagination detected: total_pages={total_pages}, total_records={pagination.total_records}. "
+                    f"Fetching pages 2..{total_pages} (page_size={effective_page_size}) for ticker='{ticker}'..."
+                )
+                semaphore = asyncio.Semaphore(min(settings.FIIN_MAX_KEEPALIVE_CONNECTIONS, 10))
+
+                async def _fetch_single_page(p: int) -> List[OHLCVRecord]:
+                    async with semaphore:
+                        page_resp = await self.fetch_ohlcv(
+                            ticker=ticker,
+                            start_time=start_time,
+                            end_time=end_time,
+                            page=p,
+                            page_size=effective_page_size,
+                            client=target_client,
+                        )
+                        return page_resp.data
+
+                tasks = [_fetch_single_page(p) for p in range(2, total_pages + 1)]
+                results = await asyncio.gather(*tasks)
+                for page_data in results:
+                    all_records.extend(page_data)
+
+            elif len(first_response.data) == effective_page_size:
+                # If pagination metadata is missing or total_pages not given, but page 1 was full
+                logger.info(
+                    f"Page 1 returned full page_size={effective_page_size} without total_pages metadata. "
+                    f"Paginating sequentially..."
+                )
+                curr_page = 2
+                max_safety_pages = 200
+                while curr_page <= max_safety_pages:
+                    next_resp = await self.fetch_ohlcv(
+                        ticker=ticker,
+                        start_time=start_time,
+                        end_time=end_time,
+                        page=curr_page,
+                        page_size=effective_page_size,
+                        client=target_client,
+                    )
+                    if not next_resp.data:
+                        break
+                    all_records.extend(next_resp.data)
+                    if len(next_resp.data) < effective_page_size:
+                        break
+                    curr_page += 1
+
+            # 3. Deduplicate records by (ticker, trade_date) and sort chronologically
+            unique_records: Dict[tuple, OHLCVRecord] = {}
+            for r in all_records:
+                unique_records[(r.ticker, r.trade_date)] = r
+
+            sorted_records = sorted(unique_records.values(), key=lambda r: (r.trade_date, r.ticker))
+            total_records = len(sorted_records)
+
+            logger.info(
+                f"Fetched total {total_records} OHLCV records for ticker(s)='{ticker}' "
+                f"(range: {start_time or 'start'} to {end_time or 'latest'})."
+            )
+
+            return FiinOHLCVResponse(
+                status="success",
+                data=sorted_records,
+                pagination=PaginationMetadata(
+                    page=1,
+                    total_pages=1,
+                    page_size=total_records,
+                    total_records=total_records,
+                ),
+            )
+        finally:
+            if owns_client:
+                await target_client.aclose()
 
 
 # Singleton client instance
